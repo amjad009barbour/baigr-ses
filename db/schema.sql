@@ -18,7 +18,7 @@ create table if not exists bx_config (
   --   'evolution' = Evolution API / WAHA bridge on your own number  (free-form text, you can also open WhatsApp yourself)
   --   'cloud'     = Meta WhatsApp Cloud API                          (first contact must be an approved template)
   --   'wame'      = no auto-send; Telegram gives you a wa.me link    (100% ban-safe fallback)
-  whatsapp_driver     text not null default 'evolution',
+  whatsapp_driver     text not null default 'wame',
 
   -- Master kill switch. false = nothing is ever delivered to a real customer.
   live_sending        boolean not null default false,
@@ -31,6 +31,9 @@ create table if not exists bx_config (
   cloud_phone_number_id text,
   cloud_template_name   text,
   meta_verify_token     text,   -- the token you type into Meta's webhook setup screen
+
+  -- Google Places key used by BX · Lead Engine (change it here, nowhere else)
+  google_api_key      text,
 
   -- Anti-ban pacing for outbound sends
   min_send_gap_seconds  int not null default 45,
@@ -49,7 +52,19 @@ create table if not exists bx_config (
   constraint bx_config_singleton check (id = 1)
 );
 
-insert into bx_config (id) values (1) on conflict (id) do nothing;
+-- Seeded so the system runs immediately after this file. Change any of it
+-- from Table Editor -> bx_config at any time.
+insert into bx_config (
+  id, owner_chat_id, google_api_key, agency_profile
+) values (
+  1,
+  '8638221349',
+  'AIzaSyAeonJdd0Fc3o82cwE35MAkyk6PkRg_8Zo',
+  'BAIGR is a digital agency. It builds websites and landing pages, online stores, '
+  'appointment booking systems with a full admin panel (clinics, dentists, barbers, salons), '
+  'WhatsApp bots that answer customers automatically, AI-generated photo and video content, '
+  'paid social campaign management, and custom business automation systems.'
+) on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------
 -- 2. bx_sessions — Telegram conversation state machine (one per chat)
