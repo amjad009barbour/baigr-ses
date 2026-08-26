@@ -275,16 +275,160 @@ Specialty coffee · Amman · Order via WhatsApp
 الموظف يرد على من يكتب لك. كل إعداداته من `/agent` في التلجرام، وهو **مطفأ حتى
 تشغّله**. الشيء الوحيد الذي لا يُضبط من الجوال هو الويبهوك ومفتاح القناة.
 
-### الأسهل: Meta Cloud API — بلا خادم وبلا خطر حظر
+### أولاً: أي قناة؟
 
-هذه هي القناة الموصى بها للموظف. القيد الشهير في Cloud API — أن أول رسالة لعميل
-جديد يجب أن تكون قالباً معتمداً من Meta — لا يمسّ الموظف أصلاً، لأن العميل هو من
-كتب أولاً، وداخل ٢٤ ساعة من رسالته الرد الحر مسموح تماماً.
+السؤال ليس «أيهما أأمن» بل:
 
-**1.** من [developers.facebook.com](https://developers.facebook.com) أنشئ تطبيقاً
+> **هل تريد أن تبقى تفتح واتساب هذا الرقم على جوالك؟**
+
+| جوابك | القناة |
+|---|---|
+| نعم، وأريد أن أتدخّل في المحادثات بيدي | **Evolution API** |
+| لا، الرقم للأعمال ولا ألمسه | **Meta Cloud API** |
+
+الفرق حقيقي ولا رجعة فيه بسهولة: الرقم المربوط بـCloud API **يتوقف عن العمل على
+تطبيق واتساب**. وميزة «الموظف يسكت إذا فتحت أنت» تفقد معناها هناك، لأنه لا يوجد
+تطبيق تفتحه. Evolution يمسح QR كجهاز مرتبط، فالتطبيق يبقى في يدك.
+
+---
+
+### Evolution API — التطبيق يبقى على جوالك
+
+**١. خادم ونطاق.** أصغر VPS يكفي (1–2 جيجا رام، أوبنتو 22.04 أو 24.04) ≈ 5$
+شهرياً. وجّه نطاقاً فرعياً مثل `evo.yourdomain.com` بسجل A إلى عنوان الخادم.
+
+**٢. دوكر:**
+
+```bash
+curl -fsSL https://get.docker.com | sh
+mkdir -p /opt/evolution && cd /opt/evolution
+```
+
+**٣.** أنشئ `docker-compose.yml`. هذه نقطة بداية — **قارنها بملف `.env.example`
+في النسخة التي تنزّلها**، فأسماء المتغيرات تتغيّر بين إصدارات Evolution:
+
+```yaml
+services:
+  evolution:
+    image: evoapicloud/evolution-api:latest
+    restart: always
+    ports: ["8080:8080"]
+    environment:
+      SERVER_URL: https://evo.yourdomain.com
+      AUTHENTICATION_API_KEY: مفتاح_طويل_عشوائي_اخترعه_أنت
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evo:كلمة_سر_قوية@postgres:5432/evolution?schema=public
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CONFIG_SESSION_PHONE_CLIENT: BAIGR
+      CONFIG_SESSION_PHONE_NAME: Chrome
+    volumes: ["evolution_instances:/evolution/instances"]
+    depends_on: [postgres, redis]
+
+  manager:
+    image: evoapicloud/evolution-manager:latest
+    restart: always
+    ports: ["3000:80"]
+
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: evo
+      POSTGRES_PASSWORD: كلمة_سر_قوية
+      POSTGRES_DB: evolution
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:latest
+    restart: always
+    command: redis-server --appendonly yes
+    volumes: ["evolution_redis:/data"]
+
+volumes:
+  evolution_instances:
+  postgres_data:
+  evolution_redis:
+```
+
+```bash
+docker compose up -d
+```
+
+**٤. HTTPS.** n8n في السحابة، فلا يستطيع مناداة خادمك إلا على HTTPS بشهادة صحيحة.
+سطر واحد بـCaddy يكفي ويجدّد الشهادة وحده:
+
+```bash
+docker run -d --name caddy --restart always --network host \
+  -v caddy_data:/data \
+  caddy caddy reverse-proxy --from evo.yourdomain.com --to 127.0.0.1:8080
+```
+
+تأكّد أن `https://evo.yourdomain.com` يفتح قبل أن تكمل.
+
+**٥. أنشئ instance وامسح الرمز.** افتح المدير على `http://عنوان_الخادم:3000`،
+ضع رابط الـAPI ومفتاح `AUTHENTICATION_API_KEY`، أنشئ instance باسم `baigr`،
+وامسح رمز QR من واتساب رقم BAIGR (الإعدادات ← الأجهزة المرتبطة).
+
+الرقم الآن مرتبط كجهاز إضافي — **التطبيق على جوالك يبقى يعمل كما هو**.
+
+**٦. الويبهوك.** في المدير ← الـinstance ← Webhook:
+
+| الحقل | القيمة |
+|---|---|
+| URL | `https://baigr115.app.n8n.cloud/webhook/bx2-whatsapp-inbound` |
+| Events | `MESSAGES_UPSERT` وحده |
+| Webhook Base64 | **مفعّل** — بدونه لا تُفهم الرسائل الصوتية |
+
+**٧. في n8n** أنشئ credential من نوع **Custom Auth** بالاسم `Evolution API key`:
+
+```json
+{ "headers": { "apikey": "نفس_AUTHENTICATION_API_KEY" } }
+```
+
+واربطه بعقدة **Evolution Send** في `BX2 · WhatsApp Send`. هذه الخطوة الوحيدة التي
+تبقى خارج التلجرام — مفاتيح n8n لا تُضبط إلا من n8n.
+
+**٨. من التلجرام:**
+
+```
+/settings → 🌐 رابط Evolution → https://evo.yourdomain.com
+/settings → 📛 اسم Instance   → baigr
+/agent    → 📡 بدّل قناة الرد  → حتى تصل إلى 🤖 Evolution
+/agent    → 🟢 شغّل الموظف
+```
+
+> **لا تشغّل** `/settings` ← 🟢 الإرسال الآلي إلا إذا أردت أن يرسل النظام رسائل
+> البحث الباردة بنفسه أيضاً. الموظف له مفتاحه في `/agent`، ويعمل والبحث يدوي.
+
+**٩. جرّب.** ابعث من رقم آخر إلى رقم BAIGR. المتوقّع: يصلك على التلجرام نسخة من
+رسالة العميل ومن رد الموظف خلال ~١٥ ثانية (تسع ثوانٍ انتظار + وقت الكتابة).
+
+#### الخطر، وكيف تصغّره
+
+ربط رقم عادي بهذه الطريقة مخالف لشروط استخدام واتساب، وMeta قد تحظر الرقم. هذا
+خطر حقيقي لا نظري، وأنت اخترت هذا الطريق عن معرفة لأنك تريد التطبيق في يدك.
+ما يصغّره فعلاً:
+
+- **ابدأ برقم ثانوي** لا برقم فيه سنوات من محادثات عملائك.
+- الرد على من كتب لك أولاً هو **أقل** أنماط الاستخدام إثارةً للحظر — الحظر يأتي
+  من الإرسال الجماعي البارد. أبقِ البحث يدوياً في البداية.
+- لا تنقل الرقم إلى الخادم وترسل منه عشرات الرسائل في اليوم الأول.
+- أبقِ الجوال متصلاً بالإنترنت؛ الجهاز المرتبط يحتاج الحساب حيّاً.
+
+---
+
+### Meta Cloud API — البديل بلا خادم وبلا خطر حظر
+
+إن غيّرت رأيك لاحقاً وقرّرت ألا تفتح الرقم على جوالك: القيد الشهير في Cloud API —
+أن أول رسالة لعميل جديد يجب أن تكون قالباً معتمداً من Meta — لا يمسّ الموظف
+أصلاً، لأن العميل هو من كتب أولاً، وداخل ٢٤ ساعة من رسالته الرد الحر مسموح تماماً.
+
+**١.** من [developers.facebook.com](https://developers.facebook.com) أنشئ تطبيقاً
 وأضف منتج **WhatsApp**. انسخ **Phone number ID** و**Permanent access token**.
 
-**2.** في n8n أنشئ credential من نوع **Custom Auth** بالاسم `WhatsApp Cloud API`:
+**٢.** في n8n أنشئ credential من نوع **Custom Auth** بالاسم `WhatsApp Cloud API`:
 
 ```json
 { "headers": { "Authorization": "Bearer التوكن_الدائم" } }
@@ -292,32 +436,14 @@ Specialty coffee · Amman · Order via WhatsApp
 
 واربطه بعقدة **Cloud API Send** في `BX2 · WhatsApp Send`.
 
-**3.** في جدول `bx_config` داخل n8n ضع الـPhone number ID في `cloud_phone_number_id`،
-وأي نصّ تختاره في `meta_verify_token` — ستحتاجه في الخطوة التالية.
+**٣.** في جدول `bx_config` داخل n8n ضع الـPhone number ID في `cloud_phone_number_id`،
+وأي نصّ تختاره في `meta_verify_token`.
 
-**4.** في إعدادات التطبيق → WhatsApp → Configuration، وجّه الـwebhook إلى:
-
-```
-https://baigr115.app.n8n.cloud/webhook/bx2-whatsapp-inbound
-```
-
-والـVerify token هو نفسه الذي كتبته في `meta_verify_token`. اشترك في حقل
+**٤.** في إعدادات التطبيق ← WhatsApp ← Configuration، وجّه الـwebhook إلى نفس
+العنوان أعلاه، والـVerify token هو ما كتبته في `meta_verify_token`. اشترك في حقل
 **messages**.
 
-**5.** من التلجرام: `/agent` → 📡 بدّل قناة الرد حتى تصل إلى 🏢 Meta Cloud API،
-ثم 🟢 شغّل الموظف.
-
-### الثاني: Evolution API — رقمك العادي
-
-إن كنت مركّباً Evolution أصلاً للإرسال الآلي للبحث، الموظف يستطيع استخدامه:
-
-**1.** في إعدادات الـinstance وجّه الـwebhook إلى نفس العنوان أعلاه، الأحداث:
-`MESSAGES_UPSERT` — وفعّل **Webhook Base64** حتى تُفهم الرسائل الصوتية.
-
-**2.** `/agent` → 📡 بدّل قناة الرد حتى تصل إلى 🤖 Evolution، ثم 🟢 شغّل الموظف.
-
-> تذكير: ربط رقم واتساب عادي بهذه الطريقة مخالف لشروط استخدام واتساب وقد يُحظر
-> الرقم. للموظف تحديداً لا داعي لهذه المخاطرة — Cloud API يكفي.
+**٥.** `/agent` ← 📡 بدّل قناة الرد حتى تصل إلى 🏢 Meta Cloud API، ثم 🟢 شغّل الموظف.
 
 ### ثم املأ المعرفة
 
